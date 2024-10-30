@@ -130,8 +130,10 @@ def display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, c
     memory_usage (float): Memory usage percentage.
     remaining_time (float): Estimated remaining time in minutes.
     """
-    # Format remaining time for better readability
-    if remaining_time and remaining_time > 1440:  # Cap at 24 hours
+    # Adjust remaining time display for very low power draws or idle states
+    if power < 0.005:  # Low power threshold for near-idle state
+        remaining_time_display = "Idle"
+    elif remaining_time and remaining_time > 1440:  # Cap at 24 hours for realistic display
         remaining_time_display = "More than 24 hrs"
     elif remaining_time and remaining_time > 60:
         hours = int(remaining_time // 60)
@@ -145,10 +147,11 @@ def display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, c
     print(f"{Fore.YELLOW}Current:{Style.RESET_ALL}        {current:.6f} A")
     print(f"{Fore.MAGENTA}Power:{Style.RESET_ALL}          {power:.3f} W")
     print(f"{Fore.LIGHTBLUE_EX}Battery:{Style.RESET_ALL}       {percent:.1f}%")
-    print(f"{Fore.RED}CPU Temp:{Style.RESET_ALL}       {cpu_temp:.1f}°C")
+    print(f"{Fore.RED}CPU Temp:{Style.RESET_ALL}       {cpu_temp:.1f}°C")  # Ensure correct encoding for °C symbol
     print(f"{Fore.CYAN}CPU Usage:{Style.RESET_ALL}      {cpu_usage:.1f}%")
     print(f"{Fore.LIGHTYELLOW_EX}Memory Usage:{Style.RESET_ALL} {memory_usage:.1f}%")
     print(f"{Fore.LIGHTGREEN_EX}Remaining Time:{Style.RESET_ALL} {remaining_time_display}")
+
 
 
 if __name__ == '__main__':
