@@ -92,15 +92,15 @@ class INA219:
         return None
 
 def display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, cpu_usage, memory_usage, remaining_time):
-    print(Fore.CYAN + f"[{timestamp}] " + Style.RESET_ALL +
-          Fore.GREEN + f"Load Voltage: {bus_voltage:.2f} V " + Style.RESET_ALL +
-          Fore.YELLOW + f"Current: {current:.3f} A " + Style.RESET_ALL +
-          Fore.MAGENTA + f"Power: {power:.2f} W " + Style.RESET_ALL +
-          f"{Fore.BLUE}Battery: {percent:.1f}% " + Style.RESET_ALL +
-          f"{Fore.RED}CPU Temp: {cpu_temp:.1f}°C " + Style.RESET_ALL +
-          f"{Fore.CYAN}CPU Usage: {cpu_usage:.1f}% " + Style.RESET_ALL +
-          f"{Fore.LIGHTYELLOW_EX}Memory Usage: {memory_usage:.1f}% " + Style.RESET_ALL +
-          f"{Fore.LIGHTGREEN_EX}Remaining Time: {remaining_time:.2f} min" if remaining_time else "Calculating...")
+    print(f"{Fore.CYAN}[{timestamp}]{Style.RESET_ALL}\n"
+          f"{Fore.GREEN}Load Voltage:{Style.RESET_ALL}   {bus_voltage:.3f} V\n"
+          f"{Fore.YELLOW}Current:{Style.RESET_ALL}        {current:.6f} A\n"
+          f"{Fore.MAGENTA}Power:{Style.RESET_ALL}          {power:.3f} W\n"
+          f"{Fore.LIGHTBLUE_EX}Battery:{Style.RESET_ALL}       {percent:.1f}%\n"
+          f"{Fore.RED}CPU Temp:{Style.RESET_ALL}       {cpu_temp:.1f}°C\n"
+          f"{Fore.CYAN}CPU Usage:{Style.RESET_ALL}      {cpu_usage:.1f}%\n"
+          f"{Fore.LIGHTYELLOW_EX}Memory Usage:{Style.RESET_ALL} {memory_usage:.1f}%\n"
+          f"{Fore.LIGHTGREEN_EX}Remaining Time:{Style.RESET_ALL} {remaining_time:.2f} min" if remaining_time else "Calculating...")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="SmartUPS Monitoring")
@@ -119,6 +119,7 @@ if __name__ == '__main__':
                                  "CPU Temp (°C)", "CPU Usage (%)", "Memory Usage (%)", "Remaining Time (min)"])
 
             while True:
+                # Retrieve data from INA219 and system metrics
                 bus_voltage = ina219.getBusVoltage_V()
                 current = ina219.getCurrent_mA() / 1000
                 power = ina219.getPower_W()
@@ -130,11 +131,14 @@ if __name__ == '__main__':
                 memory_usage = psutil.virtual_memory().percent
                 remaining_time = ina219.estimate_remaining_time(power)
 
+                # Display readings in a clear format
                 display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, cpu_usage, memory_usage, remaining_time)
 
+                # Log data to CSV file
                 writer.writerow([timestamp, bus_voltage, current, power, percent, cpu_temp, cpu_usage, memory_usage])
                 file.flush()
 
+                # Display plot if requested
                 if args.show_plot:
                     time_window.append(datetime.now())
                     voltage_data.append(bus_voltage)
