@@ -1,0 +1,4 @@
+smbus2==0.4.1
+psutil==5.9.0
+matplotlib==3.5.1
+colorama==0.4.4
