@@ -9,10 +9,10 @@ import os
 import argparse
 from colorama import Fore, Style, init
 
-# Initialize colorama
+# Initialize colorama for colored terminal output
 init()
 
-# Configuration constants
+# INA219 Register Addresses
 _REG_CONFIG = 0x00
 _REG_SHUNTVOLTAGE = 0x01
 _REG_BUSVOLTAGE = 0x02
@@ -20,21 +20,18 @@ _REG_POWER = 0x03
 _REG_CURRENT = 0x04
 _REG_CALIBRATION = 0x05
 
-# Default INA219 setup
+# Configurable Constants
 I2C_BUS = 1
 I2C_ADDRESS = 0x41
-SAMPLE_INTERVAL = 2  # seconds
+SAMPLE_INTERVAL = 2  # Data sampling interval in seconds
+BATTERY_CAPACITY_WH = 100  # UPS battery capacity in watt-hours
 
-# Battery and UPS configuration
-BATTERY_CAPACITY_WH = 100  # Adjust this to your battery capacity
-is_on_battery = False
-
-# Thresholds for alerts
+# Thresholds for Alerts
 MAX_VOLTAGE = 15.0
 MAX_CURRENT = 2.0
 MAX_POWER = 10.0
 
-# Plot initialization
+# Plot initialization and data buffers for optional plotting
 plt.ion()
 fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
 time_window = deque(maxlen=50)
@@ -43,7 +40,17 @@ current_data = deque(maxlen=50)
 power_data = deque(maxlen=50)
 
 class INA219:
+    """Class to interface with the INA219 sensor for voltage, current, and power readings."""
+
     def __init__(self, i2c_bus=I2C_BUS, addr=I2C_ADDRESS, shunt_resistance=0.1):
+        """
+        Initializes the INA219 with default calibration for 32V and 2A range.
+
+        Parameters:
+        i2c_bus (int): The I2C bus number.
+        addr (int): The I2C address of the INA219.
+        shunt_resistance (float): Shunt resistor value in ohms.
+        """
         self.bus = smbus.SMBus(i2c_bus)
         self.addr = addr
         self.shunt_resistance = shunt_resistance
@@ -52,65 +59,98 @@ class INA219:
         self.set_calibration_32V_2A()
 
     def write(self, address, data):
+        """Writes a 16-bit value to a register on the INA219 sensor."""
         temp = [data >> 8, data & 0xFF]
         self.bus.write_i2c_block_data(self.addr, address, temp)
 
     def read(self, address):
+        """Reads a 16-bit value from a register on the INA219 sensor."""
         data = self.bus.read_i2c_block_data(self.addr, address, 2)
         return (data[0] << 8) | data[1]
 
     def set_calibration_32V_2A(self):
+        """Sets the INA219 to measure up to 32V and 2A."""
         self._cal_value = int(0.04096 / (self._current_lsb * self.shunt_resistance))
         self.write(_REG_CALIBRATION, self._cal_value)
         self.config = (0x2000 | 0x1800 | 0x07)  # 32V, 320mV gain, continuous mode
         self.write(_REG_CONFIG, self.config)
 
     def getShuntVoltage_mV(self):
+        """Returns the shunt voltage in mV."""
         value = self.read(_REG_SHUNTVOLTAGE)
         return ((value - 65536) if value > 32767 else value) * 0.01
 
     def getBusVoltage_V(self):
+        """Returns the bus voltage in V."""
         value = self.read(_REG_BUSVOLTAGE)
         return (value >> 3) * 0.004
 
     def getCurrent_mA(self):
+        """Returns the current in mA."""
         value = self.read(_REG_CURRENT)
         return ((value - 65536) if value > 32767 else value) * self._current_lsb
 
     def getPower_W(self):
+        """Returns the power in W."""
         value = self.read(_REG_POWER)
         return ((value - 65536) if value > 32767 else value) * self._power_lsb
 
     def getPercent(self, bus_voltage):
+        """Calculates battery percentage based on bus voltage."""
         percent = ((bus_voltage - 9) / 3.6) * 100
         return min(max(percent, 0), 100)
 
     def estimate_remaining_time(self, current_power_draw):
-        if is_on_battery and current_power_draw > 0:
+        """
+        Estimates the remaining time based on current power draw.
+
+        Parameters:
+        current_power_draw (float): Current power draw in W.
+
+        Returns:
+        float: Estimated remaining time in minutes.
+        """
+        if current_power_draw > 0:
             remaining_time_hours = BATTERY_CAPACITY_WH / current_power_draw
-            return max(0, remaining_time_hours * 60)  # Convert hours to minutes
+            return min(10000, remaining_time_hours * 60)  # Limits time to avoid impractical values
         return None
 
 def display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, cpu_usage, memory_usage, remaining_time):
-    print(f"{Fore.CYAN}[{timestamp}]{Style.RESET_ALL}\n"
-          f"{Fore.GREEN}Load Voltage:{Style.RESET_ALL}   {bus_voltage:.3f} V\n"
-          f"{Fore.YELLOW}Current:{Style.RESET_ALL}        {current:.6f} A\n"
-          f"{Fore.MAGENTA}Power:{Style.RESET_ALL}          {power:.3f} W\n"
-          f"{Fore.LIGHTBLUE_EX}Battery:{Style.RESET_ALL}       {percent:.1f}%\n"
-          f"{Fore.RED}CPU Temp:{Style.RESET_ALL}       {cpu_temp:.1f}°C\n"
-          f"{Fore.CYAN}CPU Usage:{Style.RESET_ALL}      {cpu_usage:.1f}%\n"
-          f"{Fore.LIGHTYELLOW_EX}Memory Usage:{Style.RESET_ALL} {memory_usage:.1f}%\n"
-          f"{Fore.LIGHTGREEN_EX}Remaining Time:{Style.RESET_ALL} {remaining_time:.2f} min" if remaining_time else "Calculating...")
+    """
+    Displays a formatted summary of key metrics with color highlights for easy readability.
+
+    Parameters:
+    timestamp (str): Timestamp for the reading.
+    bus_voltage (float): Voltage reading in V.
+    current (float): Current reading in A.
+    power (float): Power reading in W.
+    percent (float): Battery percentage.
+    cpu_temp (float): CPU temperature in °C.
+    cpu_usage (float): CPU usage percentage.
+    memory_usage (float): Memory usage percentage.
+    remaining_time (float): Estimated remaining time in minutes.
+    """
+    print(f"{Fore.CYAN}[{timestamp}]{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}Load Voltage:{Style.RESET_ALL}   {bus_voltage:.3f} V")
+    print(f"{Fore.YELLOW}Current:{Style.RESET_ALL}        {current:.6f} A")
+    print(f"{Fore.MAGENTA}Power:{Style.RESET_ALL}          {power:.3f} W")
+    print(f"{Fore.LIGHTBLUE_EX}Battery:{Style.RESET_ALL}       {percent:.1f}%")
+    print(f"{Fore.RED}CPU Temp:{Style.RESET_ALL}       {cpu_temp:.1f}°C")
+    print(f"{Fore.CYAN}CPU Usage:{Style.RESET_ALL}      {cpu_usage:.1f}%")
+    print(f"{Fore.LIGHTYELLOW_EX}Memory Usage:{Style.RESET_ALL} {memory_usage:.1f}%")
+    print(f"{Fore.LIGHTGREEN_EX}Remaining Time:{Style.RESET_ALL} {remaining_time:.2f} min" if remaining_time else "Calculating...")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="SmartUPS Monitoring")
     parser.add_argument("--show-plot", action="store_true", help="Display real-time plot of metrics")
+    parser.add_argument("--log-interval", type=int, default=SAMPLE_INTERVAL, help="Interval for logging data in seconds")
     args = parser.parse_args()
 
     ina219 = INA219()
     log_file = "ina219_data_log.csv"
     file_exists = os.path.isfile(log_file)
 
+    # Setup CSV logging with headers if the file is new
     try:
         with open(log_file, mode="a", newline="") as file:
             writer = csv.writer(file)
@@ -157,7 +197,7 @@ if __name__ == '__main__':
                     ax3.set_title("Power (W)")
                     plt.pause(0.05)
 
-                time.sleep(SAMPLE_INTERVAL)
+                time.sleep(args.log_interval)
 
     except IOError as e:
         print("I2C communication error:", e)
