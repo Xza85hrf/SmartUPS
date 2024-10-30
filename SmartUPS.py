@@ -130,10 +130,18 @@ def display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, c
     memory_usage (float): Memory usage percentage.
     remaining_time (float): Estimated remaining time in minutes.
     """
-    # Adjust remaining time display for very low power draws or idle states
-    if power < 0.005:  # Low power threshold for near-idle state
-        remaining_time_display = "Idle"
-    elif remaining_time and remaining_time > 1440:  # Cap at 24 hours for realistic display
+    # Determine power consumption stage based on power level
+    if power < 0.005:
+        power_stage = "System Idle - Low Power Consumption"
+    elif power < 0.5:
+        power_stage = "Low Power Consumption"
+    elif power < 2.0:
+        power_stage = "Moderate Power Consumption"
+    else:
+        power_stage = "High Power Consumption"
+
+    # Format remaining time for better readability
+    if remaining_time and remaining_time > 1440:  # Cap at 24 hours
         remaining_time_display = "More than 24 hrs"
     elif remaining_time and remaining_time > 60:
         hours = int(remaining_time // 60)
@@ -142,15 +150,18 @@ def display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, c
     else:
         remaining_time_display = f"{remaining_time:.2f} min" if remaining_time else "Calculating..."
 
+    # Display output with power stage and remaining time
     print(f"{Fore.CYAN}[{timestamp}]{Style.RESET_ALL}")
     print(f"{Fore.GREEN}Load Voltage:{Style.RESET_ALL}   {bus_voltage:.3f} V")
     print(f"{Fore.YELLOW}Current:{Style.RESET_ALL}        {current:.6f} A")
     print(f"{Fore.MAGENTA}Power:{Style.RESET_ALL}          {power:.3f} W")
     print(f"{Fore.LIGHTBLUE_EX}Battery:{Style.RESET_ALL}       {percent:.1f}%")
-    print(f"{Fore.RED}CPU Temp:{Style.RESET_ALL}       {cpu_temp:.1f}°C")  # Ensure correct encoding for °C symbol
+    print(f"{Fore.RED}CPU Temp:{Style.RESET_ALL}       {cpu_temp:.1f}°C")
     print(f"{Fore.CYAN}CPU Usage:{Style.RESET_ALL}      {cpu_usage:.1f}%")
     print(f"{Fore.LIGHTYELLOW_EX}Memory Usage:{Style.RESET_ALL} {memory_usage:.1f}%")
+    print(f"{Fore.LIGHTGREEN_EX}Status:{Style.RESET_ALL}       {power_stage}")
     print(f"{Fore.LIGHTGREEN_EX}Remaining Time:{Style.RESET_ALL} {remaining_time_display}")
+
 
 
 
