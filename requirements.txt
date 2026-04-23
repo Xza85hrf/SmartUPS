@@ -1,4 +1,10 @@
-smbus2==0.4.1
-psutil==5.9.0
-matplotlib==3.5.1
-colorama==0.4.4
+smbus2>=0.4.3
+psutil>=5.9.0
+colorama>=0.4.6
+
+# Optional — needed for --show-plot
+matplotlib>=3.8.0
+
+# Optional — needed for --tray (system-tray icon)
+pystray>=0.19.5
+Pillow>=10.0.0

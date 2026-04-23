@@ -1,0 +1,48 @@
+[Unit]
+Description=SmartUPS — Waveshare UPS Module 3S monitor + graceful shutdown
+Documentation=https://github.com/Xza85hrf/SmartUPS
+# Wait for the network and i2c bus to be present before starting.
+After=multi-user.target network-online.target
+Wants=network-online.target
+
+[Service]
+# Replace 'pi' with your actual user account if different.
+User=pi
+Group=i2c
+Type=simple
+
+# Working directory = repo clone location. Adjust if you cloned elsewhere.
+WorkingDirectory=/opt/SmartUPS
+
+# --daemon suppresses terminal output; --tray is OFF in system-wide mode because
+# there is no session-bus yet. Start the tray separately from a user unit if you
+# want the indicator visible in your desktop session (see README).
+ExecStart=/usr/bin/python3 /opt/SmartUPS/SmartUPS.py --daemon \
+          --shutdown-threshold 20 --shutdown-consecutive 3 \
+          --csv-file /var/log/smartups/ina219_data_log.csv \
+          --log-file /var/log/smartups/smartups.log
+
+# Auto-restart on crash, but not too aggressively.
+Restart=on-failure
+RestartSec=10s
+
+# Resource limits — keep it extremely light on the Pi.
+CPUQuota=10%
+MemoryMax=128M
+
+# Hardening.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smartups
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+# Need CAP_SYS_BOOT so shutdown works without a full sudo setup.
+AmbientCapabilities=CAP_SYS_BOOT
+CapabilityBoundingSet=CAP_SYS_BOOT
+
+[Install]
+WantedBy=multi-user.target

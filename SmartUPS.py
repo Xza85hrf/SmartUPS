@@ -1,16 +1,27 @@
 import smbus2 as smbus
 import time
 import csv
+import logging
+import signal
+import sys
 import psutil
-import matplotlib.pyplot as plt
 from collections import deque
 from datetime import datetime
 import os
 import argparse
 from colorama import Fore, Style, init
 
+from smartups.shutdown_guard import ShutdownGuard
+from smartups.tray import TrayIcon
+
+# matplotlib is only imported when --show-plot is requested so headless /
+# daemon installs don't pay its import cost or need a display.
+plt = None  # set lazily by _init_plot()
+
 # Initialize colorama for colored terminal output
 init()
+
+log = logging.getLogger("smartups")
 
 # INA219 Register Addresses
 _REG_CONFIG = 0x00
@@ -31,13 +42,44 @@ MAX_VOLTAGE = 15.0
 MAX_CURRENT = 2.0
 MAX_POWER = 10.0
 
-# Plot initialization and data buffers for optional plotting
-plt.ion()
-fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
+# Data buffers for optional plotting (populated only when --show-plot is set).
 time_window = deque(maxlen=50)
 voltage_data = deque(maxlen=50)
 current_data = deque(maxlen=50)
 power_data = deque(maxlen=50)
+
+# Plot figure/axes — created lazily by _init_plot() when --show-plot is set.
+fig = None
+ax1 = ax2 = ax3 = None
+
+
+def _init_plot():
+    """Import matplotlib and create plot axes. Idempotent."""
+    global plt, fig, ax1, ax2, ax3
+    if fig is not None:
+        return
+    import matplotlib.pyplot as _plt  # noqa: PLC0415
+
+    plt = _plt
+    plt.ion()
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
+
+
+def detect_charging(current_a: float, bus_voltage: float) -> bool:
+    """Return True if the UPS is charging (mains connected).
+
+    The INA219 reports signed current: negative values mean current is flowing
+    INTO the battery (charging), positive values mean OUT (discharging). A
+    small band around zero is treated as idle-but-plugged-in when the bus
+    voltage is high enough to indicate mains power.
+    """
+    if current_a < -0.005:
+        return True  # clearly charging
+    if current_a > 0.005:
+        return False  # clearly discharging
+    # near-zero current: use bus voltage as a proxy — full pack on charger
+    # typically sits at ~12.5V+, unplugged packs sag under load
+    return bus_voltage >= 12.4
 
 class INA219:
     """Class to interface with the INA219 sensor for voltage, current, and power readings."""
@@ -165,58 +207,148 @@ def display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, c
 
 
 
-if __name__ == '__main__':
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="SmartUPS Monitoring")
     parser.add_argument("--show-plot", action="store_true", help="Display real-time plot of metrics")
-    parser.add_argument("--log-interval", type=int, default=SAMPLE_INTERVAL, help="Interval for logging data in seconds")
-    args = parser.parse_args()
+    parser.add_argument("--log-interval", type=int, default=SAMPLE_INTERVAL,
+                        help="Interval for logging data in seconds")
+    parser.add_argument("--daemon", action="store_true",
+                        help="Run in background mode: suppress terminal output and log to file")
+    parser.add_argument("--tray", action="store_true",
+                        help="Show a system-tray icon reflecting battery status (needs pystray + Pillow)")
+    parser.add_argument("--shutdown-threshold", type=float, default=20.0,
+                        help="Battery %% at or below which graceful shutdown is armed (default: 20)")
+    parser.add_argument("--shutdown-consecutive", type=int, default=3,
+                        help="Consecutive critical readings required to fire shutdown (default: 3)")
+    parser.add_argument("--no-shutdown", action="store_true",
+                        help="Disable the automatic graceful-shutdown guard (monitoring only)")
+    parser.add_argument("--log-file", default=None,
+                        help="Path for the rotating text log (default: ~/.local/share/smartups/smartups.log)")
+    parser.add_argument("--csv-file", default="ina219_data_log.csv",
+                        help="CSV data log path (default: ./ina219_data_log.csv)")
+    return parser
+
+
+def _configure_logging(daemon: bool, log_file: str | None) -> None:
+    """Configure root logging. In daemon mode we only write to file, otherwise
+    stream to stderr as well."""
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if log_file is None:
+        log_file = os.path.expanduser("~/.local/share/smartups/smartups.log")
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    fh = logging.FileHandler(log_file)
+    fh.setFormatter(fmt)
+    root.addHandler(fh)
+    if not daemon:
+        sh = logging.StreamHandler()
+        sh.setFormatter(fmt)
+        root.addHandler(sh)
+
+
+def _get_cpu_temp() -> float | None:
+    temps = psutil.sensors_temperatures() or {}
+    entry = temps.get("cpu_thermal")
+    if entry:
+        return entry[0].current
+    return None
+
+
+if __name__ == '__main__':
+    args = _build_arg_parser().parse_args()
+    _configure_logging(daemon=args.daemon, log_file=args.log_file)
+    log.info("SmartUPS starting (daemon=%s, tray=%s, shutdown=%s)",
+             args.daemon, args.tray, not args.no_shutdown)
+
+    stop_requested = False
+
+    def _on_signal(*_a):
+        global stop_requested
+        stop_requested = True
+        log.info("Stop requested — finishing current sample then exiting.")
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
 
     ina219 = INA219()
-    log_file = "ina219_data_log.csv"
-    file_exists = os.path.isfile(log_file)
 
-    # Setup CSV logging with headers if the file is new
+    guard = ShutdownGuard(
+        threshold_pct=args.shutdown_threshold,
+        consecutive_required=args.shutdown_consecutive,
+        enabled=not args.no_shutdown,
+    )
+    log.info("ShutdownGuard: threshold=%.1f%% consecutive=%d enabled=%s",
+             guard.threshold_pct, guard.consecutive_required, guard.enabled)
+
+    tray: TrayIcon | None = None
+    if args.tray:
+        if TrayIcon.available():
+            tray = TrayIcon(on_quit=_on_signal)
+            tray.start(initial_percent=100.0, initial_charging=True)
+            log.info("Tray icon started.")
+        else:
+            log.warning("--tray requested but pystray/Pillow not installed. "
+                        "Install: pip install pystray pillow")
+
+    if args.show_plot:
+        _init_plot()
+
+    file_exists = os.path.isfile(args.csv_file)
+
     try:
-        with open(log_file, mode="a", newline="") as file:
+        with open(args.csv_file, mode="a", newline="") as file:
             writer = csv.writer(file)
             if not file_exists:
                 writer.writerow(["Timestamp", "Load Voltage (V)", "Current (A)", "Power (W)", "Percent (%)",
-                                 "CPU Temp (°C)", "CPU Usage (%)", "Memory Usage (%)", "Remaining Time (min)"])
+                                 "Charging", "CPU Temp (°C)", "CPU Usage (%)", "Memory Usage (%)",
+                                 "Remaining Time (min)"])
 
-            while True:
-                # Retrieve data from INA219 and system metrics
+            while not stop_requested:
                 bus_voltage = ina219.getBusVoltage_V()
                 current = ina219.getCurrent_mA() / 1000
                 power = ina219.getPower_W()
                 percent = ina219.getPercent(bus_voltage)
+                is_charging = detect_charging(current, bus_voltage)
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                is_on_battery = bus_voltage < 12.0  # Detect if running on battery
-                cpu_temp = psutil.sensors_temperatures().get('cpu_thermal', [])[0].current if psutil.sensors_temperatures().get('cpu_thermal') else None
+                cpu_temp = _get_cpu_temp()
                 cpu_usage = psutil.cpu_percent()
                 memory_usage = psutil.virtual_memory().percent
                 remaining_time = ina219.estimate_remaining_time(power)
 
-                # Display readings in a clear format
-                display_reading(timestamp, bus_voltage, current, power, percent, cpu_temp, cpu_usage, memory_usage, remaining_time)
+                if not args.daemon:
+                    display_reading(timestamp, bus_voltage, current, power, percent,
+                                    cpu_temp, cpu_usage, memory_usage, remaining_time)
 
-                # Log data to CSV file
-                writer.writerow([timestamp, bus_voltage, current, power, percent, cpu_temp, cpu_usage, memory_usage])
+                writer.writerow([timestamp, bus_voltage, current, power, percent, is_charging,
+                                 cpu_temp, cpu_usage, memory_usage, remaining_time])
                 file.flush()
 
-                # Display plot if requested
+                if tray is not None:
+                    status = "charging" if is_charging else "on battery"
+                    tray.update(
+                        percent=percent,
+                        charging=is_charging,
+                        tooltip=f"SmartUPS: {percent:.0f}% ({status}) — {bus_voltage:.2f} V",
+                    )
+
+                if guard.observe(battery_pct=percent, is_charging=is_charging):
+                    log.critical("Graceful shutdown initiated. Exiting monitor loop.")
+                    break
+
                 if args.show_plot:
                     time_window.append(datetime.now())
                     voltage_data.append(bus_voltage)
                     current_data.append(current)
                     power_data.append(power)
-
                     ax1.clear()
                     ax1.plot(time_window, voltage_data, label="Voltage (V)", color="blue")
                     ax2.clear()
                     ax2.plot(time_window, current_data, label="Current (A)", color="orange")
                     ax3.clear()
                     ax3.plot(time_window, power_data, label="Power (W)", color="green")
-
                     ax1.set_title("Load Voltage (V)")
                     ax2.set_title("Current (A)")
                     ax3.set_title("Power (W)")
@@ -225,8 +357,10 @@ if __name__ == '__main__':
                 time.sleep(args.log_interval)
 
     except IOError as e:
-        print("I2C communication error:", e)
+        log.error("I2C communication error: %s", e)
     except KeyboardInterrupt:
-        print("\nScript interrupted by user.")
+        log.info("Script interrupted by user.")
     finally:
-        print("Script terminated.")
+        if tray is not None:
+            tray.stop()
+        log.info("Script terminated.")

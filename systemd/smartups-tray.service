@@ -1,0 +1,24 @@
+[Unit]
+Description=SmartUPS tray indicator (user session)
+# Start after the graphical session is ready.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+
+# WorkingDirectory should match your clone location. This is a user unit, so
+# install it as:   ~/.config/systemd/user/smartups-tray.service
+WorkingDirectory=%h/SmartUPS
+
+# Tray-only instance — does NOT fire shutdown (that is the system service's job).
+# Change --csv-file to a per-user path to avoid clashing with the system service.
+ExecStart=/usr/bin/python3 %h/SmartUPS/SmartUPS.py --tray --no-shutdown \
+          --csv-file %h/.local/share/smartups/ina219_data_log.csv \
+          --log-file %h/.local/share/smartups/tray.log
+
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

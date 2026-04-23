@@ -67,12 +67,104 @@ python3 SmartUPS.py --show-plot --log-interval 5
 ### Command-Line Arguments
 
 - `--show-plot`: Enables real-time plotting of voltage, current, and power usage.
-- `--log-interval`: Specifies the logging interval in seconds (default is 2 seconds).
+- `--log-interval`: Logging interval in seconds (default: 2).
+- `--daemon`: Run in background mode — suppresses terminal output, writes to log file only.
+- `--tray`: Show a system-tray indicator (KDE, GNOME, Windows, macOS). Requires `pystray` and `Pillow`.
+- `--shutdown-threshold`: Battery % at or below which the graceful-shutdown guard arms (default: 20).
+- `--shutdown-consecutive`: Consecutive critical readings required to fire shutdown (default: 3). Prevents transient voltage dips from triggering early shutdowns.
+- `--no-shutdown`: Disable automatic graceful shutdown entirely (monitoring-only mode).
+- `--csv-file`: Path for the CSV data log (default: `./ina219_data_log.csv`).
+- `--log-file`: Path for the text log (default: `~/.local/share/smartups/smartups.log`).
 
-### Example Command
+### Example Commands
 
+Standard interactive monitoring with a plot:
 ```bash
 python3 SmartUPS.py --show-plot --log-interval 5
+```
+
+Headless with graceful shutdown at 15% and a custom CSV location:
+```bash
+python3 SmartUPS.py --daemon --shutdown-threshold 15 --csv-file /var/log/smartups/data.csv
+```
+
+Interactive with a battery icon in your system tray (no automatic shutdown):
+```bash
+python3 SmartUPS.py --tray --no-shutdown
+```
+
+## Graceful Shutdown
+
+When running on battery and the charge drops to the configured threshold for the configured number of consecutive samples, SmartUPS invokes `sudo shutdown -h now`. The consecutive-reading requirement means a single transient dip will never trigger a shutdown — the condition has to persist across `--shutdown-consecutive` samples (default 3, so 6 seconds at the default 2s sampling interval).
+
+For the shutdown command to succeed non-interactively:
+
+- **Option A (recommended):** Run SmartUPS as a systemd service with the `CAP_SYS_BOOT` capability (see `systemd/smartups.service`).
+- **Option B:** Add a passwordless sudoers entry for the user running SmartUPS:
+  ```bash
+  echo "$(whoami) ALL=(ALL) NOPASSWD: /sbin/shutdown" | sudo tee /etc/sudoers.d/smartups
+  ```
+
+Use `--no-shutdown` if you want monitoring only (no automated shutdown).
+
+## System Tray Icon
+
+With `--tray`, SmartUPS shows an icon in the system tray that displays the current battery percentage, colored by state:
+
+| Color | Meaning |
+|-------|---------|
+| Blue | Charging / plugged in |
+| Green | On battery, healthy (>50%) |
+| Amber | On battery, low (21–50%) |
+| Red | On battery, critical (≤20%) |
+
+Right-click the icon to quit. Requires `pystray` and `Pillow`:
+```bash
+pip install pystray pillow
+```
+
+## Auto-start on Boot (systemd)
+
+Two service units are provided in `systemd/`:
+
+- `smartups.service` — system-wide daemon that owns the shutdown logic (runs as the chosen user, auto-starts on boot).
+- `smartups-tray.service` — optional *user* unit that shows the tray icon in your desktop session (does not fire shutdown).
+
+### Install the system service
+
+```bash
+# 1. Clone to /opt (adjust path if you prefer)
+sudo git clone https://github.com/Xza85hrf/SmartUPS.git /opt/SmartUPS
+cd /opt/SmartUPS
+sudo pip3 install -r requirements.txt
+
+# 2. Create the log directory
+sudo mkdir -p /var/log/smartups
+sudo chown pi:pi /var/log/smartups          # replace 'pi' with your user
+
+# 3. Edit the unit if your username isn't 'pi'
+sudo cp systemd/smartups.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now smartups.service
+
+# 4. Check it's running
+systemctl status smartups.service
+journalctl -u smartups.service -f
+```
+
+### Install the user tray unit (KDE/GNOME)
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp /opt/SmartUPS/systemd/smartups-tray.service ~/.config/systemd/user/
+# Edit WorkingDirectory if your clone isn't at ~/SmartUPS
+systemctl --user daemon-reload
+systemctl --user enable --now smartups-tray.service
+```
+
+Enable lingering so the tray icon starts even without an active login session:
+```bash
+sudo loginctl enable-linger "$USER"
 ```
 
 ### Displayed Information
