@@ -77,7 +77,13 @@ def test_configure_logging_writes_to_file(tmp_path, script_module):
 
 
 def test_get_cpu_temp_returns_none_when_no_sensor(script_module):
-    with patch.object(script_module.psutil, "sensors_temperatures", return_value={}):
+    # psutil.sensors_temperatures only exists on Linux (and some macOS);
+    # create=True lets the test patch it on platforms where it's absent
+    # (e.g. Windows dev machines running CI mirrors of the suite).
+    with patch.object(
+        script_module.psutil, "sensors_temperatures",
+        create=True, return_value={},
+    ):
         assert script_module._get_cpu_temp() is None
 
 
@@ -87,6 +93,6 @@ def test_get_cpu_temp_returns_first_thermal_reading(script_module):
 
     with patch.object(
         script_module.psutil, "sensors_temperatures",
-        return_value={"cpu_thermal": [_Reading()]},
+        create=True, return_value={"cpu_thermal": [_Reading()]},
     ):
         assert script_module._get_cpu_temp() == 47.5
