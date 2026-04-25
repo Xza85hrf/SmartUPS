@@ -6,8 +6,8 @@ After=multi-user.target network-online.target
 Wants=network-online.target
 
 [Service]
-# Replace 'pi' with your actual user account if different.
-User=pi
+# Replace with your actual user account if different.
+User=barbatospi4b
 Group=i2c
 Type=simple
 

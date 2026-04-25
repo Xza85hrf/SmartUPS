@@ -48,6 +48,11 @@ def test_arg_parser_has_new_flags(script_module):
     assert ns.shutdown_threshold == 20.0
     assert ns.shutdown_consecutive == 3
     assert ns.show_plot is False
+    assert ns.i2c_bus == 1
+    assert ns.i2c_address == 0x41
+    assert ns.battery_capacity == 30
+    assert ns.smoothing == 5
+    assert ns.csv_keep_days == 30
 
 
 def test_arg_parser_accepts_custom_values(script_module):
@@ -57,6 +62,11 @@ def test_arg_parser_accepts_custom_values(script_module):
         "--shutdown-threshold", "15",
         "--shutdown-consecutive", "5",
         "--log-interval", "10",
+        "--i2c-bus", "0",
+        "--i2c-address", "0x40",
+        "--battery-capacity", "50",
+        "--smoothing", "10",
+        "--csv-keep-days", "7",
     ])
     assert ns.daemon is True
     assert ns.tray is True
@@ -64,6 +74,11 @@ def test_arg_parser_accepts_custom_values(script_module):
     assert ns.shutdown_threshold == 15.0
     assert ns.shutdown_consecutive == 5
     assert ns.log_interval == 10
+    assert ns.i2c_bus == 0
+    assert ns.i2c_address == 0x40
+    assert ns.battery_capacity == 50.0
+    assert ns.smoothing == 10
+    assert ns.csv_keep_days == 7
 
 
 def test_configure_logging_writes_to_file(tmp_path, script_module):
